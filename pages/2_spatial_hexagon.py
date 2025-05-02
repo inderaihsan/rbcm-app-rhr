@@ -9,6 +9,12 @@ from streamlit_folium import st_folium
 from scipy.spatial import Delaunay
 from scipy.interpolate import LinearNDInterpolator
 from streamlit_folium import folium_static
+import mapclassify
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import matplotlib.colors as colors
+import json
+
 
 
 
@@ -167,7 +173,8 @@ def create_hex_grid(gdf=None, bounds=None, n_cells=10, overlap=False, crs="EPSG:
     grid = grid.reset_index().rename(columns={"index": "grid_id"})
 
     if overlap:
-        grid = grid.sjoin(gdf, how='inner').drop_duplicates('geometry')
+        grid = grid.sjoin(gdf, how='inner').drop_duplicates('geometry') 
+    grid = grid.clip(gdf)  # Clip the grid to the polygon boundary
     return grid
 
 # Streamlit page configuration
@@ -242,7 +249,7 @@ if poly_file:
         st.subheader("📊 Hexagonal Grid Visualization")
 
         # Grid slider
-        n_cells = st.sidebar.slider("Select Grid Size", min_value=50, max_value=100, step=2, value=10)
+        n_cells = st.sidebar.slider("Select Grid Density", min_value=50, max_value=500, step=5, value=50)
         hexagrid = create_hex_grid(gdf=polygon, n_cells=n_cells, overlap=True, crs=uniform_crs)
 
         hexa_col = [items for items in hexagrid.columns if "index" in items] 
@@ -272,8 +279,10 @@ if poly_file:
             'JenksCaspall', 'JenksCaspallForced', 'JenksCaspallSampled', 'MaxP', 'MaximumBreaks',
             'NaturalBreaks', 'Quantiles', 'Percentiles', 'StdMean'
         ])
-        cmap = st.sidebar.selectbox("Select Color Palette", options=["viridis", "plasma", "inferno", "magma", "cividis"])
+        cmap = st.sidebar.selectbox("Select Color Palette", options=["viridis", "plasma", "inferno", "magma", "cividis", "cubehelix", "Blues", "Greens", "Reds", "Purples", "Oranges", "coolwarm", "YlGnBu", "YlOrRd", "BuPu", "GnBu", "PuBu", "OrRd", "RdPu"])
         k = st.sidebar.slider("Select Number of Classes", min_value=2, max_value=10, value=2, step=1)
+        # stroke_opacity = st.sidebar.slider("Select Line Transparency", min_value=0.0, max_value=5.0, value=0.5, step=0.1)
+        weight = st.sidebar.slider("Select Line Weight", min_value=0.0, max_value=5.0, value=1.0, step=0.1) 
         generate_button = st.sidebar.button("Generate Map", key="generate_map_button")
 
         if generate_button:
@@ -284,9 +293,13 @@ if poly_file:
                 column=f'{attribute_column}_mean',
                 scheme=scheme,
                 k=k,
-                cmap=cmap
+                cmap=cmap, 
+                style_kwds={
+                    # 'opacity': 0.5,
+                    'weight': weight,
+                }
             ) 
-            display_detail = st.radio("Display points and polygon?", ("Yes", "No"), key="display_points_polygon")    
+            display_detail = st.radio("Display points and polygon?", ("No", "Yes"), key="display_points_polygon")    
             if display_detail == "Yes":
                 points.explore(
                     m=m,
@@ -307,10 +320,28 @@ if poly_file:
                 # )
             folium.LayerControl().add_to(m)
             st.session_state['map'] = m
-            st.session_state['map_generated'] = True
+            st.session_state['map_generated'] = True 
+            save_button = st.button("Save Map", key="save_map_button")  
+            if save_button:
+                values = hexagrid_avg[f'{attribute_column}_mean'].fillna(0)
+                # Create classification
+                classifier = mapclassify.classify(values, scheme=scheme, k=k)
+
+                # Normalize the values to match the colormap
+                norm = colors.BoundaryNorm(classifier.bins, ncolors=plt.get_cmap(cmap).N)
+                cmap_func = plt.get_cmap(cmap)
+
+                # Map color codes
+                hexagrid_avg['color'] = values.apply(lambda x: colors.to_hex(cmap_func(norm(x))) if pd.notnull(x) else '#d3d3d3') 
+                hexagrid_avg['price_per_m'] = hexagrid_avg['hpm_mean'] 
+                hexagrid_avg.to_crs("EPSG:4326", inplace=True)
+                hexagrid_avg.to_file("hexagrid_avg.geojson", driver="GeoJSON", layer_options={"ID_GENERATE": "YES"}) 
+               
+                
+                st.success("✅ Map saved successfully!")
     else:
         st.info("📍 Upload a point GeoJSON file to proceed with the analysis.")
 
 # Display generated map if exists
 if st.session_state.get('map') is not None:
-    folium_static(st.session_state['map'], width=1000, height=500)
+    folium_static(st.session_state['map'], width=1000, height=1000)
