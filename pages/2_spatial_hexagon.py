@@ -1,21 +1,19 @@
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, Point
 import folium
 import numpy as np
-from streamlit_folium import st_folium
+from streamlit_folium import st_folium, folium_static
 
 from scipy.spatial import Delaunay
 from scipy.interpolate import LinearNDInterpolator
-from streamlit_folium import folium_static
+
 import mapclassify
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as colors
 import json
-
-
 
 
 filtered_data = None
@@ -106,76 +104,107 @@ def apply_tin_interpolation_v2(gdf, value_column):
     
     return gdf
 
-def apply_tin_interpolation(gdf, value_column):
-    """Interpolate missing values using TIN (LinearNDInterpolator).
+# def apply_tin_interpolation(gdf, value_column):
+#     """Interpolate missing values using TIN (LinearNDInterpolator).
     
-    Args:
-        gdf: GeoDataFrame containing the data
-        value_column: Name of the column with values to interpolate
+#     Args:
+#         gdf: GeoDataFrame containing the data
+#         value_column: Name of the column with values to interpolate
         
-    Returns:
-        GeoDataFrame with interpolated values
-    """
-    # Check if there are any missing values
-    if gdf[value_column].isna().sum() == 0:
-        return gdf  # No missing values, return original
+#     Returns:
+#         GeoDataFrame with interpolated values
+#     """
+#     # Check if there are any missing values
+#     if gdf[value_column].isna().sum() == 0:
+#         return gdf  # No missing values, return original
     
-    known = gdf.dropna(subset=[value_column])
-    unknown = gdf[gdf[value_column].isna()]
+#     known = gdf.dropna(subset=[value_column])
+#     unknown = gdf[gdf[value_column].isna()]
 
-    # Need at least 3 known points to create a TIN
-    if len(known) < 3:
-        raise ValueError("At least 3 known points are required for TIN interpolation")
+#     # Need at least 3 known points to create a TIN
+#     if len(known) < 3:
+#         raise ValueError("At least 3 known points are required for TIN interpolation")
 
-    # Get centroids of polygons as coordinates
-    known_coords = np.array(list(known.geometry.centroid.apply(lambda geom: (geom.x, geom.y))))
-    known_values = known[value_column].values
+#     # Get centroids of polygons as coordinates
+#     known_coords = np.array(list(known.geometry.centroid.apply(lambda geom: (geom.x, geom.y))))
+#     known_values = known[value_column].values
 
-    interpolator = LinearNDInterpolator(known_coords, known_values)
+#     interpolator = LinearNDInterpolator(known_coords, known_values)
 
-    # Interpolate for unknown values
-    unknown_coords = np.array(list(unknown.geometry.centroid.apply(lambda geom: (geom.x, geom.y))))
-    interpolated_values = interpolator(unknown_coords)
+#     # Interpolate for unknown values
+#     unknown_coords = np.array(list(unknown.geometry.centroid.apply(lambda geom: (geom.x, geom.y))))
+#     interpolated_values = interpolator(unknown_coords)
 
-    # Apply the interpolated values back to the original GeoDataFrame
-    gdf.loc[gdf[value_column].isna(), value_column] = interpolated_values
+#     # Apply the interpolated values back to the original GeoDataFrame
+#     gdf.loc[gdf[value_column].isna(), value_column] = interpolated_values
 
-    return gdf
+#     return gdf
 
-def create_hex_grid(gdf=None, bounds=None, n_cells=10, overlap=False, crs="EPSG:4326"):
-    """Create a hexagonal grid over the provided geometry."""
+
+def create_hex_grid(gdf=None, bounds=None, n_cells=10, overlap=False, crs="EPSG:4326", buffer_size=0.05):
+    """
+    Create a hexagonal grid over the provided geometry with full edge coverage.
+
+    Parameters:
+    - gdf: GeoDataFrame with input geometry (preferred).
+    - bounds: Optional bounds tuple (xmin, ymin, xmax, ymax).
+    - n_cells: Approximate number of hexes horizontally.
+    - overlap: If True, keep only hexes that intersect the geometry.
+    - crs: Coordinate Reference System (default EPSG:4326).
+    - buffer_size: Buffer applied to geometry to ensure coverage.
+
+    Returns:
+    - GeoDataFrame of hexagonal polygons covering the area.
+    """
+    if gdf is not None:
+        gdf = gdf.copy()
+        gdf["geometry"] = gdf.geometry.buffer(buffer_size)
+
     if bounds is not None:
         xmin, ymin, xmax, ymax = bounds
     else:
         xmin, ymin, xmax, ymax = gdf.total_bounds
 
-    unit = (xmax - xmin) / n_cells
-    a = np.sin(np.pi / 3)  # Height of the hexagon
+    # Hexagon width and height
+    width = (xmax - xmin) / n_cells
+    height = np.sqrt(3) * width / 2
 
-    cols = np.arange(np.floor(xmin), np.ceil(xmax), 3 * unit)
-    rows = np.arange(np.floor(ymin) / a, np.ceil(ymax) / a, unit)
+    # Adjust bounds to ensure complete coverage
+    xmin -= width
+    xmax += width
+    ymin -= height
+    ymax += height
 
+    # Create hex grid
     hexagons = []
-    for x in cols:
-        for i, y in enumerate(rows):
-            x0 = x + 1.5 * unit if i % 2 != 0 else x
-            hexagons.append(Polygon([
-                (x0, y * a),
-                (x0 + unit, y * a),
-                (x0 + (1.5 * unit), (y + unit) * a),
-                (x0 + unit, (y + (2 * unit)) * a),
-                (x0, (y + (2 * unit)) * a),
-                (x0 - (0.5 * unit), (y + unit) * a),
-            ]))
+    col = 0
+    x = xmin
+    while x < xmax + width:
+        y = ymin if col % 2 == 0 else ymin + height
+        while y < ymax + height:
+            hexagon = Polygon([
+                (x, y),
+                (x + width / 2, y + height),
+                (x + 1.5 * width, y + height),
+                (x + 2.0 * width, y),
+                (x + 1.5 * width, y - height),
+                (x + width / 2, y - height),
+            ])
+            hexagons.append(hexagon)
+            y += 2 * height
+        x += 1.5 * width
+        col += 1
 
     grid = gpd.GeoDataFrame({'geometry': hexagons}, crs=crs)
     grid["grid_area"] = grid.area
     grid = grid.reset_index().rename(columns={"index": "grid_id"})
 
     if overlap:
-        grid = grid.sjoin(gdf, how='inner').drop_duplicates('geometry') 
-    grid = grid.clip(gdf)  # Clip the grid to the polygon boundary
+        grid = gpd.sjoin(grid, gdf, how='inner', predicate='intersects').drop_duplicates('geometry')
+
+    grid = grid.clip(gdf)  # Clip hexagons to the boundary
     return grid
+
 
 # Streamlit page configuration
 st.set_page_config(page_title="📊 Spatial Grid App", layout="wide")
@@ -208,6 +237,7 @@ if poly_file:
     if point_file:
         raw_points = upload_geojson(point_file)
         raw_points.to_crs(uniform_crs, inplace=True)
+        points = raw_points.copy()
 
         # Year filtering
         if "tahun" in raw_points.columns:
@@ -218,33 +248,95 @@ if poly_file:
 
             valid_tahun = raw_points["tahun"].dropna()
             if not valid_tahun.empty:
-                tahun_min = valid_tahun.min()
-                tahun_max = valid_tahun.max()
+                unique_years = sorted(valid_tahun.unique())
 
-                slider_tahun = st.sidebar.slider(
-                    "Pilih data tahun",
-                    min_value=int(tahun_min),
-                    max_value=int(tahun_max),
-                    value=(int(tahun_min), int(tahun_max)),
-                    step=1,
-                    format="%d"
+                year_filter_type = st.sidebar.radio(
+                    "Filter berdasarkan tahun",
+                    options=["Semua Tahun", "Pilih Tahun"]
                 )
 
-                # Filter from raw_points → so slider remains dynamic
-                points = raw_points[raw_points["tahun"].between(slider_tahun[0], slider_tahun[1])]
-                st.sidebar.write(f"📍 {len(points)} titik digunakan setelah filter.")
-                st.success("✅ Data telah difilter berdasarkan tahun.")
-            else:
-                st.warning("⚠️ Tidak ada data tahun yang valid.")
-                points = raw_points.copy()
-        else:
-            points = raw_points.copy()
+                if year_filter_type == "Pilih Tahun":
+                    selected_years = st.sidebar.multiselect(
+                        "Pilih tahun",
+                        options=unique_years,
+                        default=unique_years
+                    )
+                    points = points[points["tahun"].isin(selected_years)]
 
+        # Filter by Area Condition if the column exists
+        if 'kondisi_wilayah_sekitar' in points.columns:
+            conditions = points['kondisi_wilayah_sekitar'].dropna().unique()
+            
+            condition_filter_type = st.sidebar.radio(
+                "Filter by Area Condition",
+                options=["All Conditions", "Select Conditions"]
+            )
+            
+            if condition_filter_type == "Select Conditions":
+                selected_conditions = st.sidebar.multiselect(
+                    "Select Area Conditions",
+                    options=conditions,
+                    default=conditions
+                )
+                points = points[points['kondisi_wilayah_sekitar'].isin(selected_conditions)]
+
+        # Filter by Land Area if the column exists
+        if 'luas_tanah' in points.columns:
+            try:
+                points['luas_tanah_numeric'] = pd.to_numeric(points['luas_tanah'], errors='coerce')
+                min_area = points['luas_tanah_numeric'].min()
+                max_area = points['luas_tanah_numeric'].max()
+
+                land_area_filter_type = st.sidebar.radio(
+                    "Filter by Land Area",
+                    options=["All Land Areas", "Range Filter", "Category Filter"]
+                )
+
+                if land_area_filter_type == "Range Filter":
+                    land_area_min_max = st.sidebar.slider(
+                        "Land Area Range (m²)",
+                        min_value=float(min_area),
+                        max_value=float(max_area),
+                        value=(float(min_area), float(max_area)),
+                        step=10.0
+                    )
+                    points = points[
+                        points['luas_tanah_numeric'].between(land_area_min_max[0], land_area_min_max[1])
+                    ]
+
+                elif land_area_filter_type == "Category Filter":
+                    land_area_category = st.sidebar.multiselect(
+                        "Land Area Categories",
+                        options=["< 1,000 m²", "1,000 - 10,000 m²", "> 10,000 m²"],
+                        default=["< 1,000 m²", "1,000 - 10,000 m²", "> 10,000 m²"]
+                    )
+                    def categorize_area(val):
+                        if pd.isna(val):
+                            return None
+                        if val < 1000:
+                            return "< 1,000 m²"
+                        elif val <= 10000:
+                            return "1,000 - 10,000 m²"
+                        else:
+                            return "> 10,000 m²"
+
+                    points['area_category'] = points['luas_tanah_numeric'].apply(categorize_area)
+                    points = points[points['area_category'].isin(land_area_category)]
+
+            except Exception as e:
+                st.sidebar.warning(f"⚠️ Tidak dapat memproses 'luas_tanah': {e}")
+
+        st.sidebar.write(f"📍 {len(points)} titik digunakan setelah filter.")
+        st.success("✅ Data telah difilter sesuai kriteria.")
+        
         index_col = [items for items in points.columns if "index" in items] 
         points.drop(index_col, axis=1, inplace=True)
+        filtered_data = points.copy()
 
         # Dropdown to select attribute
-        attribute_column = st.sidebar.selectbox("Select Attribute for Analysis", options=points.columns)
+        numeric_cols = points.select_dtypes(include=['number']).columns
+        attribute_column = st.sidebar.selectbox("Select Attribute for Analysis", options=numeric_cols)
+
 
         st.subheader("📊 Hexagonal Grid Visualization")
 
@@ -254,10 +346,15 @@ if poly_file:
 
         hexa_col = [items for items in hexagrid.columns if "index" in items] 
         hexagrid.drop(hexa_col, axis=1, inplace=True) 
-        if(filtered_data is not None):
-            hexagrid_with_data = hexagrid.sjoin(filtered_data, predicate="intersects") 
-        else :
-            hexagrid_with_data = hexagrid.sjoin(points, predicate="intersects")
+
+        # Use filtered_data if it exists and has rows, otherwise fallback to raw points
+        if 'filtered_data' in locals() and not filtered_data.empty:
+            points_used = filtered_data
+        else:
+            points_used = points
+
+        # Perform spatial join with hex grid
+        hexagrid_with_data = hexagrid.sjoin(points_used, predicate="intersects")
 
         # Aggregate statistics
         hexagrid_stats = hexagrid_with_data.groupby("grid_id")[attribute_column].agg(['mean', 'median', 'max', 'min']).reset_index()
@@ -333,7 +430,7 @@ if poly_file:
 
                 # Map color codes
                 hexagrid_avg['color'] = values.apply(lambda x: colors.to_hex(cmap_func(norm(x))) if pd.notnull(x) else '#d3d3d3') 
-                hexagrid_avg['price_per_m'] = hexagrid_avg['hpm_mean'] 
+                hexagrid_avg['price_per_m'] = hexagrid_avg[f'{attribute_column}_mean']
                 hexagrid_avg.to_crs("EPSG:4326", inplace=True)
                 hexagrid_avg.to_file("hexagrid_avg.geojson", driver="GeoJSON", layer_options={"ID_GENERATE": "YES"}) 
                
