@@ -117,7 +117,7 @@ if click_data and 'last_active_drawing' in click_data and click_data['last_activ
     else:
         st.success("Sending request to the API...")
         
-        req = requests.post(st.secrets['PREDICT_API_URL'], json=request_data)
+        req = requests.post(st.secrets['PREDICT_API_URL'], json=request_data, verify=False)  # Use verify=False to skip SSL verification if needed
         
         if req.status_code == 200:
             response = req.json()  # Correct way to parse JSON from the response
@@ -143,7 +143,7 @@ if click_data and 'last_active_drawing' in click_data and click_data['last_activ
             st.markdown(f"**Median:** Rp {round(response['prediction']['median']):,}")
             st.markdown(f"**Standard Deviation:** Rp {round(response['prediction']['std']):,}")  
             # st.secrets['admin_api_url']
-            macro_analysis = requests.get(st.secrets["ADMIN_API_URL"], params = {"lon" : longitude, "lat" : latitude}) 
+            macro_analysis = requests.get(st.secrets["ADMIN_API_URL"], params = {"lon" : longitude, "lat" : latitude}, verify = False) 
             
  
             
