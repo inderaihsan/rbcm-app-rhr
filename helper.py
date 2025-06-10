@@ -2,6 +2,8 @@
 import numpy as np
 import geopandas as gpd
 import shapely
+import plotly.express as px
+from shapely.geometry import Polygon, box
 
 def create_grid(gdf=None, bounds=None, n_cells=10, overlap=False, crs="EPSG:4326"):
     """Create square grid that covers a geodataframe area
@@ -76,3 +78,118 @@ def create_hex_grid(gdf=None, bounds=None, n_cells=10, overlap=False, crs="EPSG:
         cols = ['grid_id','geometry','grid_area']
         grid = grid.sjoin(gdf, how='inner').drop_duplicates('geometry')
     return grid
+
+def visualize_poi_by_wkt(draw_geometry_wkt, engine):
+    # Define POI layers and colors
+    df_property_data = None
+
+    poi_layers = {
+        'school': ('school_indonesia_', 'purple'),
+        'hospital': ('hospital_indonesia_', 'blue'),
+        'cemetery': ('cemetery_indonesia_', 'black'),
+        'convenience store': ('convenience_store_indonesia_', 'orange'),
+        'cafe/restaurant': ('cafe_restaurant_indonesia_', 'purple'),
+        'bus stop': ('bus_stop_indonesia_', 'pink'),
+        # 'road': ('road_indonesia_', 'brown'),
+        'train station': ('train_indonesia_', 'yellow'),
+        'government institution': ('government_institution_or_services_', 'gray'), 
+        'property_data' : ('property_data_with_geometry', 'green'), 
+        'genangan_banjir' : ('genangan_banjir_2020', 'blue'),
+        'sutet' : ('sutet_indonesia_', 'red'),
+    }
+
+    poi_counts = []
+   
+
+    # Draw selected WKT on map
+    drawn_geom = wkt.loads(draw_geometry_wkt) 
+    center = [drawn_geom.centroid.y, drawn_geom.centroid.x]  # [lat, lon]
+    m = folium.Map(location=center, zoom_start=14)
+    drawn_gdf = gpd.GeoDataFrame(geometry=[drawn_geom], crs="EPSG:4326")
+    drawn_gdf.explore(m=m, color='black', style_kwds={'fillOpacity': 0.05, 'weight': 2}, name="Selected Area")
+    st.write(drawn_gdf.to_crs(drawn_gdf.estimate_utm_crs()).area)
+
+    for label, (table_name, color) in poi_layers.items():
+        sql = f"""
+            SELECT * FROM {table_name}
+            WHERE ST_Intersects(geometry, ST_GeomFromText('{draw_geometry_wkt}', 4326))
+        """
+        gdf = gpd.read_postgis(sql, engine, geom_col='geometry')
+        count = len(gdf)
+        poi_counts.append({"POI": label, "Count": count})
+
+        if not gdf.empty:
+            if(table_name == 'genangan_banjir_2020' or 'sutet_indonesia_'):
+                gdf = gdf.clip(drawn_gdf)
+                gdf.explore(m=m, color=color, name=label, marker_kwds={'radius': 4, 'fillOpacity': 0.6})
+            if(table_name == 'property_data_with_geometry'):
+                df_property_data = gdf 
+                
+            gdf.explore(
+                m=m,
+                color=color,
+                name=label,
+                marker_kwds={'radius': 4, 'fillOpacity': 0.6}
+            ) 
+           
+
+    folium.LayerControl().add_to(m)
+
+    poi_df = pd.DataFrame(poi_counts)
+    bar_fig = px.bar(
+        poi_df.sort_values('Count', ascending=False),
+        x='POI', y='Count', color='POI',
+        title="POI Count in Selected Area",
+        text='Count'
+    ) 
+
+# try:
+    land_price_hist = px.histogram(
+        x=df_property_data['kemungkinan_transaksi_tanahm2'],
+        nbins=10,
+        title="Land Price Distribution in Selected Area (IDR/m²)"
+    ) 
+
+    building_price_hist = px.histogram( 
+        x=df_property_data['kemungkinan_transaksi_bangunanm2'],
+        nbins=10,
+        title="Building Price Distribution in Selected Area (IDR/m²)",
+    ) 
+
+
+    # Group by year and calculate the median price
+    median_price_per_year = (
+        df_property_data.groupby('tahun')['kemungkinan_transaksi_tanahm2']
+        .median()
+        .reset_index()
+        .sort_values('tahun')
+    )
+
+    # Create the line chart
+    yearly_price_development = px.line(
+        median_price_per_year,
+        x='tahun',
+        y='kemungkinan_transaksi_tanahm2',
+        title="Median Estimated Land Price (sqm) per Year",
+        labels={'tahun': 'Year', 'kemungkinan_transaksi_tanahm2': 'Median Land Price (IDR/m²)'},
+        markers=True  # optional: adds markers on data points
+    )
+
+
+
+    # Create the bar chart
+    kondisi_wilayah_unique = df_property_data['kondisi_wilayah_sekitar'].unique() 
+    value_ = [] 
+    for i in kondisi_wilayah_unique:
+        value_.append(df_property_data[df_property_data['kondisi_wilayah_sekitar'] == i].shape[0])
+
+    surrounding_environment = px.pie(
+        names=kondisi_wilayah_unique,
+        values=value_,
+        title="Surrounding Environment in Selected Area",
+    )
+
+   
+    return m, bar_fig, land_price_hist, building_price_hist, yearly_price_development, surrounding_environment
+
+
