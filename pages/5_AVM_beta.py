@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 from folium.plugins import Draw
 from shapely.geometry import shape
 from shapely.ops import transform as shp_transform
-from helper import visualize_poi_by_wkt
+from helper import get_insights
 import json
 import requests
 import pyproj
@@ -48,8 +48,8 @@ def fetch_admin(lon: float, lat: float) -> dict:
 
 @st.cache_resource(show_spinner=False)
 def fetch_visuals(buffer_wkt: str):
-    # visualize_poi_by_wkt now returns 6 items: (map_viz, bar_fig, land_price_kde, yearly_price_development, surrounding_environment, prop_df)
-    return visualize_poi_by_wkt(buffer_wkt, engine)
+    # get_insights now returns 6 items: (map_viz, bar_fig, land_price_kde, yearly_price_development, surrounding_environment, prop_df)
+    return get_insights(buffer_wkt, engine)
 
 
 

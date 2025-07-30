@@ -197,3 +197,147 @@ def visualize_poi_by_wkt(draw_geometry_wkt, engine):
     return m, bar_fig, land_price_hist, building_price_hist, yearly_price_development, surrounding_environment
 
 
+
+
+def get_insights(draw_geometry_wkt, engine):
+    # Define POI layers and colors
+    df_property_data = None
+
+    poi_layers = {
+        'school': ('school_indonesia_', 'purple'),
+        'hospital': ('hospital_indonesia_', 'blue'),
+        'cemetery': ('cemetery_indonesia_', 'black'),
+        'convenience store': ('convenience_store_indonesia_', 'orange'),
+        'cafe/restaurant': ('cafe_restaurant_indonesia_', 'purple'),
+        'bus stop': ('bus_stop_indonesia_', 'pink'),
+        # 'road': ('road_indonesia_', 'brown'),
+        'train station': ('train_indonesia_', 'yellow'),
+        'government institution': ('government_institution_or_services_', 'gray'), 
+        'property_data' : ('property_data_with_geometry', 'green'), 
+        'genangan_banjir' : ('genangan_banjir_2020', 'blue'),
+        'sutet' : ('sutet_indonesia_', 'red'),
+    }
+
+    poi_counts = []
+   
+
+    # Draw selected WKT on map
+    drawn_geom = wkt.loads(draw_geometry_wkt) 
+    center = [drawn_geom.centroid.y, drawn_geom.centroid.x]  # [lat, lon]
+    m = folium.Map(location=center, zoom_start=14)
+    drawn_gdf = gpd.GeoDataFrame(geometry=[drawn_geom], crs="EPSG:4326")
+    drawn_gdf.explore(m=m, color='black', style_kwds={'fillOpacity': 0.05, 'weight': 2}, name="Selected Area")
+    st.write(drawn_gdf.to_crs(drawn_gdf.estimate_utm_crs()).area)
+
+    for label, (table_name, color) in poi_layers.items():
+        if table_name != 'property_data_with_geometry': 
+
+            sql = f"""
+                SELECT * FROM {table_name}
+                WHERE ST_Intersects(geometry, ST_GeomFromText('{draw_geometry_wkt}', 4326))
+            """ 
+
+        else : 
+            sql = f"""
+                SELECT * FROM {table_name}
+                WHERE ST_Intersects(geometry, ST_GeomFromText('{draw_geometry_wkt}', 4326)) AND Kemungkinan_Transaksi_Tanahm2 >50000 AND  Kemungkinan_Transaksi_Tanahm2<=200000000
+            """            
+        gdf = gpd.read_postgis(sql, engine, geom_col='geometry')
+        count = len(gdf)
+        poi_counts.append({"POI": label, "Count": count})
+
+        if not gdf.empty:
+            if(table_name == 'genangan_banjir_2020' or 'sutet_indonesia_'):
+                gdf = gdf.clip(drawn_gdf)
+                gdf.explore(m=m, color=color, name=label, marker_kwds={'radius': 4, 'fillOpacity': 0.6})
+            if(table_name == 'property_data_with_geometry'):
+                
+                gdf['harga_penawaran'] = pd.to_numeric(gdf['harga_penawaran'], errors='coerce' ) 
+                gdf['diskon'] = pd.to_numeric(gdf['diskon'], errors='coerce' ) 
+                gdf['luas_tanah'] = pd.to_numeric(gdf['luas_tanah'], errors='coerce' )
+                gdf['tahun'] = pd.to_numeric(gdf['tahun'], errors='coerce' ) 
+                gdf = gdf[gdf['harga_penawaran'] > 0]
+                gdf = gdf[gdf['luas_tanah'] > 0]
+                gdf = gdf[gdf['tahun'] > 0]
+                gdf = gdf[gdf['diskon'] >= 0]
+                gdf = gdf[gdf['diskon'] <= 100]
+              
+                gdf['hpm'] = gdf['harga_penawaran'] * (1 - (gdf['diskon']/100))/gdf['luas_tanah']
+                gdf = gdf[['hpm', 'lebar_jalan_di_depan', 'kondisi_wilayah_sekitar','tahun', 'luas_tanah','geometry', 'jenis_objek']] 
+                gdf = gdf[gdf['hpm'] < 100000000] 
+                gdf = gdf[((gdf['jenis_objek']==1) | (gdf['jenis_objek']==2))] 
+                gdf['jenis_objek'] = gdf['jenis_objek'].apply(lambda x:'Tanah Kosong' if x==1 else 'Rumah Residensial') 
+                df_property_data = gdf
+                # gdf = gdf[gdf['jenis_objek']==1]
+            
+            gdf.explore(
+                m=m,
+                color=color,
+                name=label,
+                marker_kwds={'radius': 4, 'fillOpacity': 0.6}
+            ) 
+           
+
+    folium.LayerControl().add_to(m)
+
+    poi_df = pd.DataFrame(poi_counts)
+    bar_fig = px.bar(
+        poi_df.sort_values('Count', ascending=False),
+        x='POI', y='Count', color='POI',
+        title="POI Count in Selected Area",
+        text='Count'
+    ) 
+
+# try:
+    land_price_hist = px.histogram(
+        x=df_property_data['hpm'],
+        nbins=10,
+        title="Land Price Distribution in Selected Area (IDR/m²)"
+    ) 
+
+    # building_price_hist = px.histogram( 
+    #     x=df_property_data['kemungkinan_transaksi_bangunanm2'],
+    #     nbins=10,
+    #     title="Building Price Distribution in Selected Area (IDR/m²)",
+    # ) 
+
+
+    # Group by year and calculate the median price
+    median_price_per_year = (
+        df_property_data.groupby('tahun')['hpm']
+        .median()
+        .reset_index()
+        .sort_values('tahun')
+    )
+
+    # Create the line chart
+    yearly_price_development = px.line(
+        median_price_per_year,
+        x='tahun',
+        y='hpm',
+        title="Median Estimated Land Price (sqm) per Year",
+        labels={'tahun': 'Year', 'hpm': 'Median Land Price (IDR/m²)'},
+        markers=True  # optional: adds markers on data points
+    )
+
+
+
+    # Create the bar chart
+    kondisi_wilayah_unique = df_property_data['kondisi_wilayah_sekitar'].unique() 
+    value_ = [] 
+    for i in kondisi_wilayah_unique:
+        value_.append(df_property_data[df_property_data['kondisi_wilayah_sekitar'] == i].shape[0])
+
+    surrounding_environment = px.pie(
+        names=kondisi_wilayah_unique,
+        values=value_,
+        title="Surrounding Environment in Selected Area",
+    )
+
+
+    # df_property_data['kord'] = df_property_data['latitude'].astype(str) + df_property_data['longitude'].astype(str) 
+    # df_property_data.drop_duplicates(subset='kord', inplace=True)
+    df_property_data.drop_duplicates(subset='geometry', inplace=True)
+    return m, bar_fig, land_price_hist, yearly_price_development, surrounding_environment, df_property_data[['jenis_objek', 'luas_tanah','kondisi_wilayah_sekitar',  'lebar_jalan_di_depan', 'hpm']]
+
+
