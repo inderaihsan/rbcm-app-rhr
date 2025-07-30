@@ -1,258 +1,259 @@
 import streamlit as st
 import pandas as pd
-import geopandas as gpd
 import folium
 from streamlit_folium import st_folium, folium_static
 from sqlalchemy import create_engine
 from folium.plugins import Draw
 from shapely.geometry import shape
+from shapely.ops import transform as shp_transform
 from helper import visualize_poi_by_wkt
-from shapely import wkt
-import  json
+import json
 import requests
-from shapely.ops import transform 
-import plotly.express as px
 import pyproj
+from openai import OpenAI
 
-# --- Database Engine ---
-engine = create_engine(st.secrets["POSTGRES_ENGINE"])
+# ——— CONFIGURATION ——— 
 
-# --- Load Cached Grid ---
 
-# --- UI Tabs ---
-
-st.title("Point Analysis Beta")
-st.write("Click on map to view. analysis")
-
-m = folium.Map(location=[-6.2, 106.8], zoom_start=11)
-draw = Draw(
-    export=True,
-    draw_options={
-        "polyline": False,
-        "polygon": False,
-        "circle": False,
-        "rectangle": False,
-        "circlemarker": False,
-        "marker": True  # Only allow points
-    },
-    # edit_options={"edit": False}  # Optional: disable editing after placing
+st.set_page_config(layout="wide")
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
+engine = create_engine(
+    f"postgresql://{st.secrets['database']['user']}:{st.secrets['database']['password']}@{st.secrets['database']['host']}:{st.secrets['database']['port']}/{st.secrets['database']['name']}"
 )
-draw.add_to(m)
-folium.LayerControl().add_to(m)
 
-click_data = st_folium(m, width=1350, height=700)
+# ——— CACHES FOR PERFORMANCE ———
+@st.cache_resource(show_spinner=False)
+def geocode(address: str):
+    url = (
+        "https://maps.googleapis.com/maps/api/geocode/json"
+        f"?address={requests.utils.quote(address)}"
+        f"&key={GOOGLE_API_KEY}"
+    )
+    r = requests.get(url, timeout=5).json()
+    if r.get("results"):
+        loc = r["results"][0]["geometry"]["location"]
+        return loc["lat"], loc["lng"]
+    return None, None
+
+@st.cache_resource(show_spinner=False)
+def fetch_admin(lon: float, lat: float) -> dict:
+    r = requests.get(
+        "https://apiavm.rhr.co.id/geo/get-administrative-area",
+        params={"lon": lon, "lat": lat},
+        verify=False,
+        timeout=10
+    )
+    return r.json() if r.status_code == 200 else {}
+
+@st.cache_resource(show_spinner=False)
+def fetch_visuals(buffer_wkt: str):
+    # visualize_poi_by_wkt now returns 6 items: (map_viz, bar_fig, land_price_kde, yearly_price_development, surrounding_environment, prop_df)
+    return visualize_poi_by_wkt(buffer_wkt, engine)
 
 
-if click_data and 'last_active_drawing' in click_data and click_data['last_active_drawing']:
-    geom_geojson = click_data['last_active_drawing']['geometry']
-    shapely_geom = shape(geom_geojson)
-    selected_geom_wkt = shapely_geom.wkt
-    clicked_point = wkt.loads(selected_geom_wkt) 
-        # Define CRS
-    wgs84 = pyproj.CRS("EPSG:4326")
-    utm = pyproj.CRS("EPSG:32749")  # UTM zone 49S (correct for Jakarta/Bogor area)
 
-    # Create transformers
-    to_utm = pyproj.Transformer.from_crs(wgs84, utm, always_xy=True).transform
-    to_wgs84 = pyproj.Transformer.from_crs(utm, wgs84, always_xy=True).transform
 
-    # Transform point to UTM
-    utm_point = transform(to_utm, clicked_point)
+# ——— SESSION STATE INITIALIZATION ———
 
-    # Buffer in meters
-    buffer_utm = utm_point.buffer(1000)
+st.session_state['authorized']=False
+if "selected_geojson" not in st.session_state:
+    st.session_state.selected_geojson = None
+if "map_center" not in st.session_state:
+    st.session_state.map_center = (-6.2, 106.8)
+if "analysis_done" not in st.session_state:
+    st.session_state.analysis_done = False
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "system", "content": (
+            "You are a seasoned property consultant in Indonesia. "
+            "Based on the data provided, give clear, concise recommendations."
+        )}
+    ] 
+if st.session_state['authorized']==False : 
+    st.warning("This is a classified project, kindly contact inderaihsan@gmail.com for accessing") 
+    password_ = st.text_input(type='password', label='input password') 
+    if (password_ == st.secrets['ADMIN_PASSWORD']) : 
+        st.session_state.authorized = True 
+    else : 
+        st.error("Unauthorized access..")
+        st.session_state.authorized = False
+        st.stop()
+# pinned_context holds the permanent data_summary
+if "pinned_context" not in st.session_state:
+    st.session_state.pinned_context = None
 
-    # Transform buffer back to WGS84
-    buffer_wgs84 = transform(to_wgs84, buffer_utm)
+# ——— APP UI ———
+st.title("🏘️ Property Analysis Tool")
+st.write("Search an address or draw a marker on the map, then chat below without re-running analysis.")
 
-    # Get WKT of buffer in WGS84
-    buffer_1k = buffer_wgs84.wkt
-    import streamlit as st
-    import pandas as pd
-
-    st.title("Property Input Form")
-
-    # Input fields
-    latitude = st.number_input("Latitude", format="%.6f", value = clicked_point.y)
-    longitude = st.number_input("Longitude", format="%.6f", value = clicked_point.x)
-    lebar_jalan_di_depan = st.number_input("Lebar Jalan di Depan (m)", min_value=0)
-    luas_tanah = st.number_input("Luas Tanah (m²)", min_value=0)
-
-    sertifikat = st.selectbox("Jenis Sertifikat", options=[
-        (1, "SHM (Sertifikat Hak Milik)"),
-        (2, "SHGB (Sertifikat Hak Guna Bangunan)"),
-        (3, "Lainnya")
-    ], format_func=lambda x: x[1])[0] 
-    kondisi_wilayah_sekitar = st.selectbox("Kondisi Wilayah Sekitar", options = [
-        (1, "Komersial"), 
-        (0, "Perumahan")
-    ], format_func=lambda x: x[1])[0]
-
-    # Preprocessing
-    is_SHM = 1 if sertifikat == 1 else 0
-    SHM = 1 if sertifikat == 1 else 0
-    is_SHGB = 1 if sertifikat == 2 else 0 
-    kondisi_wilayah_sekitar_perumahan = 1 if kondisi_wilayah_sekitar==1 else 0
-
-    # Combine all into a dict (can be used for model input)
-    request_data = {
-        "latitude": latitude,
-        "longitude": longitude,
-        "lebar_jalan_di_depan": lebar_jalan_di_depan,
-        "luas_tanah": luas_tanah,
-        "sertifikat": sertifikat,
-        "is_SHM": is_SHM,
-        "SHM": SHM,
-        "is_SHGB": is_SHGB, 
-        "kondisi_wilayah_sekitar_perumahan" : kondisi_wilayah_sekitar_perumahan, 
-        'marking' : kondisi_wilayah_sekitar_perumahan, 
-        "is_hook" : kondisi_wilayah_sekitar_perumahan, 
-        "tapak_beraturan" : 1, 
-        "jenis_objek_feat" : 1
-    } 
-
-    button_predict = st.button("Predict value now!") 
-    if not (button_predict and latitude and longitude and lebar_jalan_di_depan and luas_tanah):
-        st.error("Lebar Jalan di Depan, Luas Tanah, Latitude, and Longitude are required fields.") 
+# SEARCH BAR
+search = st.text_input("🔎 Search location", placeholder="e.g. Senayan, Jakarta")
+if search:
+    lat, lng = geocode(search)
+    if lat and lng:
+        st.session_state.map_center = (lat, lng)
     else:
-        st.success("Sending request to the API...")
-        
-        req = requests.post(st.secrets['PREDICT_API_URL'], json=request_data, verify=False)  # Use verify=False to skip SSL verification if needed
-        
-        if req.status_code == 200:
-            response = req.json()  # Correct way to parse JSON from the response
-            st.success("Prediction successful!")
-            # st.write(response) 
-            with st.expander(label = 'request detail') : 
-                st.write(response) 
-            model_preds = response["prediction"]["model_prediction"]
-            df = pd.DataFrame([
-                {
-                    "Model": p["model_name"],
-                    "Prediction (Rp)": round(p["prediction"][0])
-                }
-                for p in model_preds
-            ])
+        st.warning("Location not found. Try another search term.")
 
-            # Display table
-            st.title("Model Prediction Results")
-            st.dataframe(df)
+# MAP + DRAW
+with st.container():
+    m = folium.Map(location=st.session_state.map_center, zoom_start=13)
+    if search:
+        folium.Marker(
+            st.session_state.map_center,
+            popup=search,
+            icon=folium.Icon(color="blue", icon="search")
+        ).add_to(m)
+    Draw(draw_options={"marker": True}).add_to(m)
+    folium.LayerControl().add_to(m)
+    click_data = st_folium(m, width=1350, height=500, use_container_width=True)
 
-            # Show range and summary stats
-            st.markdown(f"**Predicted Price Range:** {response['prediction']['range']}")
-            st.markdown(f"**Median:** Rp {round(response['prediction']['median']):,}")
-            st.markdown(f"**Standard Deviation:** Rp {round(response['prediction']['std']):,}")  
-            # st.secrets['admin_api_url']
-            macro_analysis = requests.get(st.secrets["ADMIN_API_URL"], params = {"lon" : longitude, "lat" : latitude}, verify = False) 
-            
- 
-            
-            if (macro_analysis.status_code ==200) : 
-                st.title("Spatial Analysis Results : ")
-                macro_analysis_response = macro_analysis.json() 
-                # Extract POI name and distance pairs
-                poi_data = []
-                                
-                # --- Group 1: Administrative Location ---
-                with st.expander("📍 Administrative Location"):
-                    st.write(pd.DataFrame({
-                        "Provinsi": macro_analysis_response["Provinsi"],
-                        "Kota/Kabupaten": macro_analysis_response["Kota/Kabupaten"],
-                        "Kecamatan": macro_analysis_response["Kecamatan"],
-                        "Kelurahan/Desa": macro_analysis_response["Kelurahan/Desa"],
-                    }, index=[0])) 
-                
-             
-                # --- Group 2: Amenity Within ---
-                with st.expander("🏢 Amenity Within"):
-                    amenity_data = {
-                        "School": (macro_analysis_response["Nearest School"], macro_analysis_response["Distance to Nearest School (m)"]),
-                        "Retail": (macro_analysis_response["Nearest Retail"], macro_analysis_response["Distance to Nearest Retail (m)"]),
-                        "Hotel": (macro_analysis_response["Nearest Hotel"], macro_analysis_response["Distance to Nearest Hotel (m)"]),
-                        "Restaurant": (macro_analysis_response["Nearest Restaurant"], macro_analysis_response["Distance to Nearest Restaurant (m)"]),
-                        "Cafe/Resto": (macro_analysis_response["Nearest Cafe/Resto"], macro_analysis_response["Distance to Nearest Cafe/Resto (m)"]),
-                        "Mall": (macro_analysis_response["Nearest Mall"], macro_analysis_response["Distance to Nearest Mall (m)"]),
-                        "Government Institution": (macro_analysis_response["Nearest Government Institution"], macro_analysis_response["Distance to Nearest Government (m)"]),
-                        "Convenience Store": (macro_analysis_response["Nearest Retail"], macro_analysis_response["Distance to Nearest Retail (m)"]),  # assuming same as Retail
-                    }
-                    df_amenities = pd.DataFrame([
-                        {"Amenity": k, "Name": v[0], "Distance (m)": v[1]}
-                        for k, v in amenity_data.items()
-                    ])
-                    st.dataframe(df_amenities)
+    if click_data and click_data.get("last_active_drawing"):
+        st.session_state.selected_geojson = click_data["last_active_drawing"]["geometry"]
+        pt = shape(st.session_state.selected_geojson)
+        st.session_state.map_center = (pt.y, pt.x)
+        st.session_state.analysis_done = False
 
-                # --- Group 3: Access to Public Transportation ---
-                with st.expander("🚉 Access to Public Transportation"):
-                    transport_data = {
-                        "Train Station": (macro_analysis_response["Nearest Train Station"], macro_analysis_response["Distance to Nearest Train Station (m)"]),
-                        "Airport": (macro_analysis_response["Nearest Airport"], macro_analysis_response["Distance to Nearest Airport (m)"]),
-                        "Bus Stop": (macro_analysis_response["Nearest Bus Stop"], macro_analysis_response["Distance to Nearest Bus Stop (m)"]),
-                    }
-                    df_transport = pd.DataFrame([
-                        {"Transportation": k, "Name": v[0], "Distance (m)": v[1]}
-                        for k, v in transport_data.items()
-                    ])
-                    st.dataframe(df_transport)
+# RUN SPATIAL ANALYSIS ONCE PER SELECTION
+if st.session_state.selected_geojson and not st.session_state.analysis_done:
+    shp = shape(st.session_state.selected_geojson)
+    lat, lng = shp.y, shp.x
 
-                # --- Group 4: Negative Factor ---
-                with st.expander("⚠️ Negative Factor"):
-                    st.write({
-                        "Nearest Cemetery": macro_analysis_response["Nearest Cemetery"],
-                        "Distance to Nearest Cemetery (m)": macro_analysis_response["Distance to Nearest Cemetery (m)"]
-                    })
+    # 1km buffer via UTM
+    wgs84 = pyproj.CRS("EPSG:4326")
+    utm   = pyproj.CRS("EPSG:32749")
+    to_utm = pyproj.Transformer.from_crs(wgs84, utm, always_xy=True).transform
+    to_wgs = pyproj.Transformer.from_crs(utm, wgs84, always_xy=True).transform
+    utm_pt = shp_transform(to_utm, shp)
+    buf = utm_pt.buffer(1000)
+    buffer_wkt = shp_transform(to_wgs, buf).wkt
 
-            st.subheader("Detailed View for Selected Area")
-            map_viz, bar_fig, land_price_kde, building_price_kde, yearly_price_development, surrounding_environment = visualize_poi_by_wkt(
-                buffer_1k, engine
-            )
+    # fetch remote data
+    admin = fetch_admin(lng, lat)
+    visuals = fetch_visuals(buffer_wkt)
+    map_viz, bar_fig, land_price_kde, yearly_price_development, surrounding_environment, prop_df = visuals
 
-            if map_viz:
-                folium_static(map_viz, width=1400, height=500)
-            else:
-                st.warning("No 1000m grid intersects with your selection.")
+    # store in session_state
+    st.session_state.analysis = {
+        "lat": lat, "lng": lng,
+        "admin": admin,
+        "map_viz": map_viz,
+        "bar_fig": bar_fig,
+        "land_price_kde": land_price_kde,
+        "yearly_price_development": yearly_price_development,
+        "surrounding_environment": surrounding_environment,
+        "prop_df": prop_df
+    }
+    # build chat_summary and pinned_context once
+    price_summary = prop_df["price"].describe().to_dict() if "price" in prop_df else {}
+    summary = {
+        "latitude": lat,
+        "longitude": lng,
+        "administrative": admin,
+        "price_summary": price_summary,
+        "properties": prop_df.to_dict(orient="records")
+    }
+    st.session_state.chat_summary = summary
+    ctx = json.dumps(summary, indent=2)
+    st.session_state.pinned_context = {"role":"system","content": f"Data for discussion:\n{ctx}"}
 
-            # Access group: POI Count & Surrounding Environment
-            with st.expander("Access (POI and Surrounding Environment)", expanded=False):
-                cols = st.columns(2)
-                with cols[0]:
-                    if bar_fig:
-                        st.plotly_chart(bar_fig, use_container_width=True)
-                    else:
-                        st.info("POI data is not available.")
-                with cols[1]:
-                    if surrounding_environment:
-                        st.plotly_chart(surrounding_environment, use_container_width=True)
-                    else:
-                        st.info("Surrounding environment data is not available.")
+    st.session_state.analysis_done = True
 
-            # Price group: Land Price KDE & Building Price KDE
-            with st.expander("Price (Property and Land)", expanded=False):
-                cols = st.columns(2)
-                with cols[0]:
-                    if land_price_kde:
-                        st.plotly_chart(land_price_kde, use_container_width=True)
-                    else:
-                        st.info("Land price data is not available.")
-                with cols[1]:
-                    if building_price_kde:
-                        st.plotly_chart(building_price_kde, use_container_width=True)
-                    else:
-                        st.info("Building price data is not available.")
+# DISPLAY ANALYSIS
+if st.session_state.analysis_done:
+    a = st.session_state.analysis
+    lat, lng = a["lat"], a["lng"]
 
-            # Demand group: Yearly Median Price Development
-            with st.expander("Demand (Yearly Price Trend)", expanded=False):
-                if yearly_price_development:
-                    st.plotly_chart(yearly_price_development, use_container_width=True)
-                else:
-                    st.info("Yearly price trend data is not available.")
-        else:
-            st.error(f"Prediction failed with status code {req.status_code}")
-            st.write(req.text) 
+    st.subheader("📍 Selected Point")
+    c1, c2 = st.columns(2)
+    c1.write(f"**Latitude:** {lat:.6f}")
+    c2.write(f"**Longitude:** {lng:.6f}")
 
+    with st.expander("📍 Administrative Location"):
+        df_admin = pd.DataFrame([{ 
+            "Provinsi": a["admin"].get("Provinsi",""),
+            "Kota/Kabupaten": a["admin"].get("Kota/Kabupaten",""),
+            "Kecamatan": a["admin"].get("Kecamatan",""),
+            "Kelurahan/Desa": a["admin"].get("Kelurahan/Desa","")
+        }])
+        st.dataframe(df_admin, use_container_width=True)
 
+    with st.expander("🏢 Amenity & Transport & Factors"):
+        tabs = st.tabs(["🏢 Amenities","🚉 Transport","⚠️ Negative"])
+        resp = a["admin"]
+        # amenities
+        amen = {
+            "School": (resp.get("Nearest School"), resp.get("Distance to Nearest School (m)")),
+            "Retail": (resp.get("Nearest Retail"), resp.get("Distance to Nearest Retail (m)")),
+            "Hotel":  (resp.get("Nearest Hotel"),  resp.get("Distance to Nearest Hotel (m)")),
+        }
+        df_amen = pd.DataFrame([{"Amenity":k,"Name":v[0],"Dist(m)":v[1]} for k,v in amen.items()])
+        tabs[0].dataframe(df_amen, use_container_width=True)
+        # transport
+        trans = {
+            "Train Station": (resp.get("Nearest Train Station"), resp.get("Distance to Nearest Train Station (m)")),
+            "Bus Stop":      (resp.get("Nearest Bus Stop"),    resp.get("Distance to Nearest Bus Stop (m)")),
+        }
+        df_trans = pd.DataFrame([{"Transport":k,"Name":v[0],"Dist(m)":v[1]} for k,v in trans.items()])
+        tabs[1].dataframe(df_trans, use_container_width=True)
+        # negative
+        neg = {"Cemetery": (resp.get("Nearest Cemetery"), resp.get("Distance to Nearest Cemetery (m)"))}
+        df_neg = pd.DataFrame([{"Factor":k,"Name":v[0],"Dist(m)":v[1]} for k,v in neg.items()])
+        tabs[2].dataframe(df_neg, use_container_width=True)
 
+    with st.expander("Detailed View for Selected Area"):
+        mt, bt, pt, dt = st.tabs([
+            "Map visualization","📍 Access (POI Count)",
+            "📊 Price Group","💰 Demand Analysis"
+        ])
+        with mt:
+            folium_static(a["map_viz"], width=1400, height=500)
+        with bt:
+            cols = st.columns(2)
+            if a["bar_fig"]: cols[0].plotly_chart(a["bar_fig"], use_container_width=True)
+            if a["surrounding_environment"]: cols[1].plotly_chart(a["surrounding_environment"], use_container_width=True)
+        with pt:
+            if a["land_price_kde"]: st.plotly_chart(a["land_price_kde"], use_container_width=True)
+            else: st.info("Land price data not available.")
+        with dt:
+            if a["yearly_price_development"]: st.plotly_chart(a["yearly_price_development"], use_container_width=True)
+            else: st.info("Yearly price trend data not available.")
 
+    with st.expander("🏘️ Surrounding Properties"):
+        st.dataframe(a["prop_df"], use_container_width=True)
 
-    st.subheader("Preprocessed Output")
-    
+    # RENDER PAST CHAT
+    for msg in st.session_state.messages[1:]:
+        st.chat_message(msg["role"]).write(msg["content"])
 
+    # CHAT INPUT & STREAMING WITH FULL CONTEXT
+    st.subheader("Chat with AI Agent")
+    user_q = st.chat_input("💬 Ask about this location…")
+    if user_q:
+        # append user
+        st.session_state.messages.append({"role":"user","content":user_q})
+        st.chat_message("user").write(user_q)
+
+        # build history: system, pinned_context, then all messages[1:]
+        history = [st.session_state.messages[0]]
+        if st.session_state.pinned_context:
+            history.append(st.session_state.pinned_context)
+        history += st.session_state.messages[1:]
+
+        # assistant streaming
+        with st.chat_message("assistant"):
+            placeholder = st.empty()
+            full_text = ""
+            # reserve slot
+            st.session_state.messages.append({"role":"assistant","content":""})
+            for chunk in client.chat.completions.create(
+                model="gpt-4.1-mini", messages=history, stream=True, temperature=0.7
+            ):
+                delta = chunk.choices[0].delta.content or ""
+                full_text += delta
+                placeholder.write(full_text)
+            # save final
+            st.session_state.messages[-1]["content"] = full_text
+else:
+    st.info("Draw a marker or search above, then analysis will appear.")

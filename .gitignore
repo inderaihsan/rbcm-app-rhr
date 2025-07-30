@@ -14,3 +14,7 @@ Desktop.ini
 
 # Node
 node_modules/
+.streamlit/
+.vscode/
+__pycache__/
+
