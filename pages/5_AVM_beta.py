@@ -70,15 +70,7 @@ if "messages" not in st.session_state:
             "Based on the data provided, give clear, concise recommendations."
         )}
     ] 
-if st.session_state['authorized']==False : 
-    st.warning("This is a classified project, kindly contact inderaihsan@gmail.com for accessing") 
-    password_ = st.text_input(type='password', label='input password') 
-    if (password_ == st.secrets['ADMIN_PASSWORD']) : 
-        st.session_state.authorized = True 
-    else : 
-        st.error("Unauthorized access..")
-        st.session_state.authorized = False
-        st.stop()
+
 # pinned_context holds the permanent data_summary
 if "pinned_context" not in st.session_state:
     st.session_state.pinned_context = None
