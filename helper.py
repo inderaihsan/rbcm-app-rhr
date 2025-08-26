@@ -213,7 +213,7 @@ def get_insights(draw_geometry_wkt, engine):
         # 'road': ('road_indonesia_', 'brown'),
         'train station': ('train_indonesia_', 'yellow'),
         'government institution': ('government_institution_or_services_', 'gray'), 
-        'property_data' : ('enginereed_property_data', 'green'), 
+        'property_data' : ('engineered_property_data', 'green'), 
         'genangan_banjir' : ('genangan_banjir_2020', 'blue'),
         'sutet' : ('sutet_indonesia_', 'red'),
     }
@@ -230,7 +230,7 @@ def get_insights(draw_geometry_wkt, engine):
     st.write(drawn_gdf.to_crs(drawn_gdf.estimate_utm_crs()).area)
 
     for label, (table_name, color) in poi_layers.items():
-        if table_name != 'property_data_with_geometry': 
+        if table_name != 'engineered_property_data': 
 
             sql = f"""
                 SELECT * FROM {table_name}
@@ -240,7 +240,7 @@ def get_insights(draw_geometry_wkt, engine):
         else : 
             sql = f"""
                 SELECT * FROM {table_name}
-                WHERE ST_Intersects(geometry, ST_GeomFromText('{draw_geometry_wkt}', 4326)) AND Kemungkinan_Transaksi_Tanahm2 >50000 AND  Kemungkinan_Transaksi_Tanahm2<=200000000
+                WHERE ST_Intersects(geometry, ST_GeomFromText('{draw_geometry_wkt}', 4326)) AND hpm < 100000000
             """            
         gdf = gpd.read_postgis(sql, engine, geom_col='geometry')
         count = len(gdf)
@@ -250,25 +250,58 @@ def get_insights(draw_geometry_wkt, engine):
             if(table_name == 'genangan_banjir_2020' or 'sutet_indonesia_'):
                 gdf = gdf.clip(drawn_gdf)
                 gdf.explore(m=m, color=color, name=label, marker_kwds={'radius': 4, 'fillOpacity': 0.6})
-            if(table_name == 'property_data_with_geometry'):
+            if(table_name == 'engineered_property_data'):
                 
                 gdf['harga_penawaran'] = pd.to_numeric(gdf['harga_penawaran'], errors='coerce' ) 
                 gdf['diskon'] = pd.to_numeric(gdf['diskon'], errors='coerce' ) 
                 gdf['luas_tanah'] = pd.to_numeric(gdf['luas_tanah'], errors='coerce' )
-                gdf['tahun'] = pd.to_numeric(gdf['tahun'], errors='coerce' ) 
+                gdf['tahun'] = pd.to_numeric(gdf['tahun_pengambilan_data'], errors='coerce' ) 
                 gdf = gdf[gdf['harga_penawaran'] > 0]
                 gdf = gdf[gdf['luas_tanah'] > 0]
                 gdf = gdf[gdf['tahun'] > 0]
                 gdf = gdf[gdf['diskon'] >= 0]
                 gdf = gdf[gdf['diskon'] <= 100]
               
-                gdf['hpm'] = gdf['harga_penawaran'] * (1 - (gdf['diskon']/100))/gdf['luas_tanah']
-                gdf = gdf[['hpm', 'lebar_jalan_di_depan', 'kondisi_wilayah_sekitar','tahun', 'luas_tanah','geometry', 'jenis_objek']] 
+                # gdf['hpm'] = gdf['harga_penawaran'] * (1 - (gdf['diskon']/100))/gdf['luas_tanah']
+                gdf = gdf[[
+                                "alamat",
+                                "latitude",
+                                "longitude",
+                                "jenis_objek",
+                                "luas_tanah",    
+                                "bentuk_tapak",
+                                "posisi_tapak",
+                                "orientasi",
+                                "lebar_jalan_di_depan",
+                                "kondisi_wilayah_sekitar",
+                                "jenis_jalan_utama",
+                                "perkerasan_jalan",
+                                "harga_penawaran",
+                                "tahun",
+                                "diskon",
+                                "hpm",
+                                "kemungkinan_transaksi_properti",
+                                "kemungkinan_transaksi_tanah",
+                                "kemungkinan_transaksi_bangunan",
+                                "geometry",
+                                "distance_to_airport",
+                                "distance_to_bus_stop",
+                                "distance_to_cafe",
+                                "distance_to_cemetery",
+                                "distance_to_convenience_store",
+                                "distance_to_government",
+                                "distance_to_hotel",
+                                "distance_to_mall",
+                                "distance_to_retail",
+                                "distance_to_school",
+                                "distance_to_main_road"
+                            ]] 
                 gdf = gdf[gdf['hpm'] < 100000000] 
                 gdf = gdf[((gdf['jenis_objek']==1) | (gdf['jenis_objek']==2))] 
                 gdf['jenis_objek'] = gdf['jenis_objek'].apply(lambda x:'Tanah Kosong' if x==1 else 'Rumah Residensial') 
                 df_property_data = gdf
-                # gdf = gdf[gdf['jenis_objek']==1]
+                print(df_property_data)
+          
             
             gdf.explore(
                 m=m,
@@ -338,6 +371,6 @@ def get_insights(draw_geometry_wkt, engine):
     # df_property_data['kord'] = df_property_data['latitude'].astype(str) + df_property_data['longitude'].astype(str) 
     # df_property_data.drop_duplicates(subset='kord', inplace=True)
     df_property_data.drop_duplicates(subset='geometry', inplace=True)
-    return m, bar_fig, land_price_hist, yearly_price_development, surrounding_environment, df_property_data[['jenis_objek', 'luas_tanah','kondisi_wilayah_sekitar',  'lebar_jalan_di_depan', 'hpm']]
+    return m, bar_fig, land_price_hist, yearly_price_development, surrounding_environment, df_property_data.drop(columns=['geometry'])
 
 

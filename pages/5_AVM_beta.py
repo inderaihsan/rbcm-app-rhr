@@ -66,8 +66,11 @@ if "analysis_done" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = [
         {"role": "system", "content": (
-            "You are a seasoned property consultant in Indonesia. "
-            "Based on the data provided, give clear, concise recommendations."
+            "You are an assistant property valuer in Indonesia. your name is RHR-AI "
+            "Based on the data provided, give clear, concise analysis of the property's value, "
+            "including the surrounding environment, property features, and any other relevant information. "
+            "you will also be given the surrounding property values to compare, user will ask about the adjustment" 
+            "you have to be able to find the best comparable and give the adjustment value from the object to the comparable"
         )}
     ] 
 
@@ -144,7 +147,8 @@ if st.session_state.selected_geojson and not st.session_state.analysis_done:
         "longitude": lng,
         "administrative": admin,
         "price_summary": price_summary,
-        "properties": prop_df.to_dict(orient="records")
+        "property_comparison": prop_df.to_dict(orient="records") , 
+        "valuation_object" : admin
     }
     st.session_state.chat_summary = summary
     ctx = json.dumps(summary, indent=2)
