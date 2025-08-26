@@ -213,7 +213,7 @@ def get_insights(draw_geometry_wkt, engine):
         # 'road': ('road_indonesia_', 'brown'),
         'train station': ('train_indonesia_', 'yellow'),
         'government institution': ('government_institution_or_services_', 'gray'), 
-        'property_data' : ('property_data_with_geometry', 'green'), 
+        'property_data' : ('enginereed_property_data', 'green'), 
         'genangan_banjir' : ('genangan_banjir_2020', 'blue'),
         'sutet' : ('sutet_indonesia_', 'red'),
     }
