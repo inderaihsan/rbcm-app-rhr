@@ -101,6 +101,21 @@ with st.container():
             icon=folium.Icon(color="blue", icon="search")
         ).add_to(m)
     Draw(draw_options={"marker": True}).add_to(m)
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+        name="Esri World Imagery",
+        overlay=False,
+        control=True,
+    ).add_to(m)
+    folium.TileLayer(
+        tiles="https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}&scale=2",
+        attr="Google Satellite",
+        name="Google Satellite",
+        overlay=False,
+        control=True,
+    ).add_to(m)
+
     folium.LayerControl().add_to(m)
     click_data = st_folium(m, width=1350, height=500, use_container_width=True)
 
@@ -183,13 +198,15 @@ if st.session_state.analysis_done:
             "School": (resp.get("Nearest School"), resp.get("Distance to Nearest School (m)")),
             "Retail": (resp.get("Nearest Retail"), resp.get("Distance to Nearest Retail (m)")),
             "Hotel":  (resp.get("Nearest Hotel"),  resp.get("Distance to Nearest Hotel (m)")),
+            
         }
         df_amen = pd.DataFrame([{"Amenity":k,"Name":v[0],"Dist(m)":v[1]} for k,v in amen.items()])
         tabs[0].dataframe(df_amen, use_container_width=True)
         # transport
         trans = {
             "Train Station": (resp.get("Nearest Train Station"), resp.get("Distance to Nearest Train Station (m)")),
-            "Bus Stop":      (resp.get("Nearest Bus Stop"),    resp.get("Distance to Nearest Bus Stop (m)")),
+            "Bus Stop":      (resp.get("Nearest Bus Stop"),    resp.get("Distance to Nearest Bus Stop (m)")), 
+            "Airport" : (resp.get("Nearest Airport"), resp.get("Distance to Nearest Airport (m)")),
         }
         df_trans = pd.DataFrame([{"Transport":k,"Name":v[0],"Dist(m)":v[1]} for k,v in trans.items()])
         tabs[1].dataframe(df_trans, use_container_width=True)
