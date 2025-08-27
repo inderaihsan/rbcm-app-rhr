@@ -285,6 +285,8 @@ def get_insights(draw_geometry_wkt, engine):
                                 "kemungkinan_transaksi_bangunan",
                                 "geometry",
                                 "distance_to_airport",
+                                "distance_to_big_city_new",
+                                "distance_to_small_city_new",
                                 "distance_to_bus_stop",
                                 "distance_to_cafe",
                                 "distance_to_cemetery",
@@ -298,6 +300,7 @@ def get_insights(draw_geometry_wkt, engine):
                             ]] 
                 gdf = gdf[gdf['hpm'] < 100000000] 
                 gdf = gdf[((gdf['jenis_objek']==1) | (gdf['jenis_objek']==2))] 
+                gdf.rename(columns={'distance_to_big_city_new' : 'distance_to_big_city', 'distance_to_small_city_new' : 'distance_to_small_city'}, inplace=True)
                 gdf['jenis_objek'] = gdf['jenis_objek'].apply(lambda x:'Tanah Kosong' if x==1 else 'Rumah Residensial') 
                 df_property_data = gdf
                 print(df_property_data)
