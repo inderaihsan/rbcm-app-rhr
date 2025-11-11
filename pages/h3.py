@@ -60,7 +60,7 @@ def create_hexagonal_grid(place_boundary, resolution=8, buffer_deg=0.02):
     # Step 3: Apply buffer once to merged shape
     buffered_geom = merged.buffer(buffer_deg)
 
-    # Step 4: Get bounds and sample grid
+    # Step 4: Get bounds and sample grid 
     minx, miny, maxx, maxy = buffered_geom.bounds
     lat_step = 0.001
     lng_step = 0.001
