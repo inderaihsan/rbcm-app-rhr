@@ -24,7 +24,9 @@ manual_lon = float(coordinate_input.split(",")[1].strip())
 land_area = st.sidebar.number_input("Land Area (m²)", min_value=1, value=285)
 road_width = st.sidebar.number_input("Road Width (m)", min_value=1, value=6)
 radius_buffer = st.sidebar.number_input("Radius Buffer (m)", min_value=1, value=150)
-agga_land_use = st.sidebar.selectbox("AGGA Land Use", options=["green", "slum to normal", "normal premium", "premium", "industri", "komersial"], index=0)
+agga_land_use = st.sidebar.selectbox("AGGA Land Use", options=["green", "slum to normal", "normal premium", "premium", "industri", "komersial"], index=0) 
+bentuk_tapak = st.sidebar.selectbox("Bentuk Tapak", options=["Persegi", "Lainnya"], index=0) 
+tahun = st.sidebar.selectbox("Tahun", options=range(2010, 2026), index=4)
 
 api_url = st.sidebar.text_input("API URL", value="http://192.168.90.115:8000/predict-using-goval-engine")
 
@@ -40,7 +42,9 @@ if predict_button:
         "land_area": land_area,
         "road_width": road_width,
         "radius_buffer_meters": radius_buffer, 
-        "agga_landuse": agga_land_use
+        "agga_landuse": agga_land_use, 
+        "bentuk_tapak": bentuk_tapak,
+        "tahun": tahun
     }
     
     full_url = f"{api_url}?{'&'.join([f'{k}={v}' for k, v in params.items()])}"
@@ -194,4 +198,4 @@ else:
         st.session_state.longitude = map_data["last_clicked"]["lng"]
         st.rerun()
     
-    st.markdown("💡 **Tip:** Click on the map to select a location, adjust parameters in the sidebar, then click 'Get Prediction'")
+    st.markdown("💡 **Tip:** Click on the map to select a location, adjust parameters in the sidebar, then click 'Get Prediction'") 
